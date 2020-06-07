@@ -1,2 +1,2 @@
 obj-m := uharddoom.o
-uharddoom-objs := uharddoom_module.o
+uharddoom-objs := uharddoom_module.o uharddoom_node.o

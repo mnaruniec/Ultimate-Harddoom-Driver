@@ -3,12 +3,7 @@
 *.tar*
 *.tgz
 
-.built-in.a.cmd
-.uharddoom.ko.cmd
-.uharddoom.mod.cmd
-.uharddoom.mod.o.cmd
-.uharddoom.o.cmd
-.uharddoom_module.o.cmd
+.*.cmd
 Module.symvers
 built-in.a
 modules.order

@@ -1,28 +1,15 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/cdev.h>
-#include <linux/file.h>
 #include <linux/interrupt.h>
 #include <linux/kmod.h>
 
 #include "uharddoom.h"
+#include "uharddoom_common.h"
+#include "uharddoom_node.h"
 
-#define UHARDDOOM_MAX_DEVICES 256
 MODULE_LICENSE("GPL");
 
-
-struct uharddoom_context {
-	struct uharddoom_device *dev;
-};
-
-struct uharddoom_device {
-	struct pci_dev *pdev;
-	struct cdev cdev;
-	int idx;
-	struct device *dev;
-	void __iomem *bar;
-	spinlock_t slock;
-};
 
 static dev_t uharddoom_devno;
 static struct uharddoom_device *uharddoom_devices[UHARDDOOM_MAX_DEVICES];
@@ -83,39 +70,6 @@ static inline uint32_t uharddoom_ior(struct uharddoom_device *dev, uint32_t reg)
 // 	spin_unlock_irqrestore(&dev->slock, flags);
 // 	return IRQ_RETVAL(istatus);
 // }
-
-/* Main device node handling.  */
-
-static int uharddoom_open(struct inode *inode, struct file *file)
-{
-	struct uharddoom_device *dev = container_of(inode->i_cdev, struct uharddoom_device, cdev);
-	struct uharddoom_context *ctx = kzalloc(sizeof *ctx, GFP_KERNEL);
-	printk(KERN_ALERT "uharddoom open\n");
-	if (!ctx)
-		return -ENOMEM;
-	ctx->dev = dev;
-	file->private_data = ctx;
-	return nonseekable_open(inode, file);
-}
-
-static int uharddoom_release(struct inode *inode, struct file *file)
-{
-	struct uharddoom_context *ctx = file->private_data;
-	struct uharddoom_device *dev = ctx->dev;
-	unsigned long flags;
-	printk(KERN_ALERT "uharddoom release\n");
-	spin_lock_irqsave(&dev->slock, flags);
-	// TODO wait for job finish
-	spin_unlock_irqrestore(&dev->slock, flags);
-	kfree(ctx);
-	return 0;
-}
-
-static const struct file_operations uharddoom_file_ops = {
-	.owner = THIS_MODULE,
-	.open = uharddoom_open,
-	.release = uharddoom_release,
-};
 
 /* PCI driver.  */
 
