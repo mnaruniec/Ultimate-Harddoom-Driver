@@ -126,7 +126,7 @@ static int uharddoom_probe(struct pci_dev *pdev,
 // 	adlerdev_iow(dev, ADLERDEV_INTR_ENABLE, 1);
 
 	/* We're live.  Let's export the cdev.  */
-	cdev_init(&dev->cdev, &uharddoom_file_ops);
+	cdev_init(&dev->cdev, &udoomdev_file_ops);
 	if ((err = cdev_add(&dev->cdev, uharddoom_devno + dev->idx, 1)))
 		goto out_cdev;
 

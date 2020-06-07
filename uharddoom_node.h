@@ -3,6 +3,6 @@
 
 #include <linux/file.h>
 
-extern const struct file_operations uharddoom_file_ops;
+extern const struct file_operations udoomdev_file_ops;
 
 #endif  // UHARDDOOM_NODE_H

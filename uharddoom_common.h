@@ -2,12 +2,25 @@
 #define UHARDDOOM_COMMON_H
 
 #include <linux/cdev.h>
+#include <linux/list.h>
 #include <linux/pci.h>
 
 #define UHARDDOOM_MAX_DEVICES 256
 
 extern dev_t uharddoom_devno;
 extern struct class uharddoom_class;
+
+struct uharddoom_page_node {
+	void *data_cpu;
+	dma_addr_t data_dma;
+	struct list_head lh;
+};
+
+struct uharddoom_buffer {
+	unsigned int size;
+	struct list_head page_list;
+	struct uharddoom_context  *ctx;
+};
 
 struct uharddoom_context {
 	struct uharddoom_device *dev;
