@@ -6,9 +6,13 @@
 #include "uharddoom_common.h"
 #include "uharddoom_buffer.h"
 
+static int buffer_release(struct inode *inode, struct file *file);
+
 static const struct file_operations buffer_file_ops = {
 	.owner = THIS_MODULE,
+	.release = buffer_release,
 };
+
 
 static void delete_buffer(struct uharddoom_device *dev,
 	struct uharddoom_buffer *buf)
@@ -42,6 +46,8 @@ long create_buffer_fd(struct file *filp, unsigned int size)
 	struct uharddoom_context *ctx = filp->private_data;
 	struct uharddoom_device *dev = ctx->dev;
 
+	printk(KERN_ALERT "create buffer\n");
+
 	if (size > round_down(UINT_MAX, PAGE_SIZE) || !size)
 		return -EINVAL;
 
@@ -53,7 +59,7 @@ long create_buffer_fd(struct file *filp, unsigned int size)
 
 	INIT_LIST_HEAD(&buffer->page_list);
 	buffer->size = size;
-	buffer->ctx = ctx;
+	buffer->dev = dev;
 
 	ret = -ENOMEM;
 	for (i = 0; i < page_count; ++i) {
@@ -85,4 +91,14 @@ out_free_node:
 out_delete_buf:
 	delete_buffer(dev, buffer);
 	goto out;
+}
+
+static int buffer_release(struct inode *inode, struct file *filp)
+{
+	// TODO make device unremovable until buffers exist
+	struct uharddoom_buffer *buffer = filp->private_data;
+	struct uharddoom_device *dev = buffer->dev;
+	delete_buffer(dev, filp->private_data);
+	printk(KERN_ALERT "release buffer\n");
+	return 0;
 }

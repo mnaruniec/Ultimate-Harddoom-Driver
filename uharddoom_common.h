@@ -19,7 +19,7 @@ struct uharddoom_page_node {
 struct uharddoom_buffer {
 	unsigned int size;
 	struct list_head page_list;
-	struct uharddoom_context  *ctx;
+	struct uharddoom_device *dev
 };
 
 struct uharddoom_context {
