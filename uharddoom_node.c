@@ -1,4 +1,4 @@
-/* Main device node handling.  */
+/* Main device node handling. */
 #include <linux/module.h>
 
 #include "uharddoom_common.h"

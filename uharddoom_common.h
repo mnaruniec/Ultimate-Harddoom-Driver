@@ -6,6 +6,9 @@
 
 #define UHARDDOOM_MAX_DEVICES 256
 
+extern dev_t uharddoom_devno;
+extern struct class uharddoom_class;
+
 struct uharddoom_context {
 	struct uharddoom_device *dev;
 };
@@ -18,5 +21,17 @@ struct uharddoom_device {
 	void __iomem *bar;
 	spinlock_t slock;
 };
+
+static inline void uharddoom_iow(struct uharddoom_device *dev,
+				uint32_t reg, uint32_t val)
+{
+	iowrite32(val, dev->bar + reg);
+}
+
+static inline uint32_t uharddoom_ior(struct uharddoom_device *dev, uint32_t reg)
+{
+	uint32_t res = ioread32(dev->bar + reg);
+	return res;
+}
 
 #endif  // UHARDDOOM_COMMON_H
