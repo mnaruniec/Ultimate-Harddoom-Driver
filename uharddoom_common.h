@@ -19,7 +19,7 @@ struct uharddoom_page_node {
 struct uharddoom_buffer {
 	unsigned int size;
 	struct list_head page_list;
-	struct uharddoom_device *dev
+	struct uharddoom_device *dev;
 };
 
 struct uharddoom_context {
@@ -45,6 +45,14 @@ static inline uint32_t uharddoom_ior(struct uharddoom_device *dev, uint32_t reg)
 {
 	uint32_t res = ioread32(dev->bar + reg);
 	return res;
+}
+
+/* 0 for incorrect size. */
+static inline uint32_t num_pages(uint32_t size)
+{
+	if (size > round_down(UINT_MAX, PAGE_SIZE) || !size)
+		return 0;
+	return round_up(size, PAGE_SIZE) / PAGE_SIZE;
 }
 
 #endif  // UHARDDOOM_COMMON_H

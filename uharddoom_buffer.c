@@ -1,16 +1,24 @@
 #include <linux/anon_inodes.h>
 #include <linux/fs.h>
 #include <linux/limits.h>
+#include <linux/mm.h>
 #include <linux/module.h>
 
 #include "uharddoom_common.h"
 #include "uharddoom_buffer.h"
 
+static int buffer_mmap(struct file *filp, struct vm_area_struct *vma);
 static int buffer_release(struct inode *inode, struct file *file);
+static vm_fault_t buffer_fault(struct vm_fault *vmf);
 
 static const struct file_operations buffer_file_ops = {
 	.owner = THIS_MODULE,
+	.mmap = buffer_mmap,
 	.release = buffer_release,
+};
+
+static const struct vm_operations_struct buffer_vm_ops = {
+	.fault = buffer_fault,
 };
 
 
@@ -48,10 +56,9 @@ long create_buffer_fd(struct file *filp, unsigned int size)
 
 	printk(KERN_ALERT "create buffer\n");
 
-	if (size > round_down(UINT_MAX, PAGE_SIZE) || !size)
+	page_count = num_pages(size);
+	if (!page_count)
 		return -EINVAL;
-
-	page_count = round_up(size, PAGE_SIZE) / PAGE_SIZE;
 
 	buffer = kmalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
@@ -91,6 +98,40 @@ out_free_node:
 out_delete_buf:
 	delete_buffer(dev, buffer);
 	goto out;
+}
+
+static int buffer_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	vma->vm_ops = &buffer_vm_ops;
+	return 0;
+}
+
+static vm_fault_t buffer_fault(struct vm_fault *vmf)
+{
+	unsigned i;
+	struct file *filp = vmf->vma->vm_file;
+	struct uharddoom_buffer *buffer = filp->private_data;
+	struct list_head *pos = &buffer->page_list;
+	struct uharddoom_page_node *node;
+	struct page *page;
+	printk(KERN_ALERT "buffer fault, pgoff = %lu\n", vmf->pgoff);
+
+	if (!filp) {
+		BUG();
+		return VM_FAULT_SIGBUS;
+	}
+	if (vmf->pgoff >= num_pages(buffer->size))
+		return VM_FAULT_SIGBUS;
+
+	for (i = 0; i <= vmf->pgoff; ++i)
+		pos = pos->next;
+
+	BUG_ON(pos == &buffer->page_list);
+	node = list_entry(pos, struct uharddoom_page_node, lh);
+	page = virt_to_page(node->data_cpu);
+	get_page(page);
+	vmf->page = page;
+	return 0;
 }
 
 static int buffer_release(struct inode *inode, struct file *filp)
