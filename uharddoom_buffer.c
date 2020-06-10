@@ -21,6 +21,10 @@ static const struct vm_operations_struct buffer_vm_ops = {
 	.fault = buffer_fault,
 };
 
+int is_buffer(struct file *filp)
+{
+	return filp->f_op == &buffer_file_ops;
+}
 
 static void delete_buffer(struct uharddoom_device *dev,
 	struct uharddoom_buffer *buf)

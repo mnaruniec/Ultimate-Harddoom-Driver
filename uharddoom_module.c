@@ -17,6 +17,7 @@ MODULE_LICENSE("GPL");
 static int uharddoom_init(void)
 {
 	int err;
+	printk(KERN_ALERT "uharddoom init\n");
 	if ((err = alloc_chrdev_region(
 		&uharddoom_devno, 0, UHARDDOOM_MAX_DEVICES, "uharddoom"
 	)))
@@ -25,8 +26,6 @@ static int uharddoom_init(void)
 		goto err_class;
 	if ((err = pci_register_driver(&uharddoom_pci_driver)))
 		goto err_pci;
-
-	printk(KERN_ALERT "uharddoom init\n");
 	return 0;
 
 err_pci:
