@@ -38,6 +38,7 @@ struct uharddoom_pagedir {
 // TODO unify int types (uint32_t etc.)
 struct uharddoom_pagetable {
 	unsigned int idx;
+	unsigned int used;
 	void *data_cpu;
 	dma_addr_t data_dma;
 	struct list_head lh;
@@ -48,7 +49,7 @@ struct uharddoom_mapping {
 	uharddoom_va start;
 	unsigned int page_count;
 	unsigned int readonly;
-	struct fd file;
+	struct file *file;
 	struct list_head lh;
 };
 
