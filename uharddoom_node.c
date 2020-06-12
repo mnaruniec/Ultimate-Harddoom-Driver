@@ -128,8 +128,6 @@ static int allocate_pde_range(struct uharddoom_context *ctx, unsigned start,
 		skip_start, skip_last);
 
 	before = pos;
-	//TODO remove
-	// mutex_lock_killable(&ctx->vm_lock);
 
 	for (i = start + skip_start; i <= last - skip_last; ++i) {
 		new = kmalloc(sizeof(*new), GFP_KERNEL);
@@ -209,9 +207,7 @@ static void buffer_fill_pagetables(struct uharddoom_pagedir *pagedir,
 
 	uharddoom_va last_addr = last_address(start_addr, page_count);
 	unsigned start_pdi = UHARDDOOM_VA_PDI(start_addr);
-	unsigned last_pdi = UHARDDOOM_VA_PDI(last_addr);
 	unsigned start_pti = UHARDDOOM_VA_PTI(start_addr);
-	unsigned last_pti = UHARDDOOM_VA_PTI(last_addr);
 
 	struct list_head *pos;
 	struct uharddoom_pagetable *entry;
@@ -229,7 +225,6 @@ static void buffer_fill_pagetables(struct uharddoom_pagedir *pagedir,
 	printk(KERN_ALERT "buffer_fill_pagetables - start_pdi: %x, start_pti: %x\n",
 		start_pdi, start_pti);
 
-	// TODO check
 	entry = get_pagetable(pagedir, start_pdi);
 	pos = &entry->lh;
 
@@ -412,7 +407,6 @@ static long ioctl_map_buffer(struct file *filp, unsigned long arg)
 	return map_buffer(filp, arg_struct.buf_fd, arg_struct.map_rdonly);
 }
 
-// TODO check and test
 static void clean_page_tables(struct uharddoom_context *ctx, uharddoom_va addr,
 	unsigned page_count)
 {
@@ -422,6 +416,7 @@ static void clean_page_tables(struct uharddoom_context *ctx, uharddoom_va addr,
 	unsigned *pagetable_entry_p;
 
 	unsigned i;
+	unsigned long flags;
 	unsigned start_pdi = UHARDDOOM_VA_PDI(addr);
 	unsigned start_pti = UHARDDOOM_VA_PTI(addr);
 
@@ -458,7 +453,10 @@ static void clean_page_tables(struct uharddoom_context *ctx, uharddoom_va addr,
 		}
 	}
 
-	// TODO reset TLB
+	/* Flush device TLB. */
+	spin_lock_irqsave(&ctx->dev->slock, flags);
+	uharddoom_iow(ctx->dev, UHARDDOOM_RESET, UHARDDOOM_RESET_TLB_USER);
+	spin_unlock_irqrestore(&ctx->dev->slock, flags);
 }
 
 static void remove_mapping(struct uharddoom_context *ctx,

@@ -1,4 +1,7 @@
 /* PCI driver. */
+#include <linux/kernel.h>
+
+#include "udoomfw.h"
 #include "uharddoom.h"
 #include "uharddoom_common.h"
 #include "uharddoom_node.h"
@@ -30,42 +33,51 @@ static struct uharddoom_device *uharddoom_devices[UHARDDOOM_MAX_DEVICES];
 static DEFINE_MUTEX(uharddoom_devices_lock);
 
 /* IRQ handler.  */
-//
-// static irqreturn_t adlerdev_isr(int irq, void *opaque)
-// {
-// 	struct adlerdev_device *dev = opaque;
-// 	unsigned long flags;
-// 	uint32_t istatus;
-// 	struct adlerdev_buffer *buf;
-// 	spin_lock_irqsave(&dev->slock, flags);
-// //	printk(KERN_ALERT "adlerdev isr\n");
-// 	istatus = adlerdev_ior(dev, ADLERDEV_INTR) & adlerdev_ior(dev, ADLERDEV_INTR_ENABLE);
-// 	if (istatus) {
-// 		adlerdev_iow(dev, ADLERDEV_INTR, istatus);
-// 		BUG_ON(list_empty(&dev->buffers_running));
-// 		buf = list_entry(dev->buffers_running.next, struct adlerdev_buffer, lh);
-// 		list_del(&buf->lh);
-// 		buf->ctx->pending_buffers--;
-// 		if (!buf->ctx->pending_buffers)
-// 			wake_up(&buf->ctx->wq);
-// 		buf->ctx->sum = adlerdev_ior(dev, ADLERDEV_SUM);
-// 		buf->ctx = 0;
-// 		list_add(&buf->lh, &dev->buffers_free);
-// 		wake_up(&dev->free_wq);
-// 		if (list_empty(&dev->buffers_running)) {
-// 			/* No more buffers to run.  */
-// 			wake_up(&dev->idle_wq);
-// 		} else {
-// 			/* Run the next buffer.  */
-// 			buf = list_entry(dev->buffers_running.next, struct adlerdev_buffer, lh);
-// 			adlerdev_iow(dev, ADLERDEV_DATA_PTR, buf->data_dma);
-// 			adlerdev_iow(dev, ADLERDEV_SUM, buf->ctx->sum);
-// 			adlerdev_iow(dev, ADLERDEV_DATA_SIZE, buf->fill_size);
-// 		}
-// 	}
-// 	spin_unlock_irqrestore(&dev->slock, flags);
-// 	return IRQ_RETVAL(istatus);
-// }
+
+static irqreturn_t uharddoom_isr(int irq, void *opaque)
+{
+	struct uharddoom_device *dev = opaque;
+	unsigned long flags;
+	unsigned istatus;
+
+	spin_lock_irqsave(&dev->slock, flags);
+	printk(KERN_ALERT "uharddoom INTERRUPT\n");
+	istatus = uharddoom_ior(dev, UHARDDOOM_INTR)
+		& uharddoom_ior(dev, UHARDDOOM_INTR_ENABLE);
+	if (istatus) {
+		uharddoom_iow(dev, UHARDDOOM_INTR, istatus);
+		printk(KERN_ALERT "uharddoom INTERRUPT: %x\n", istatus);
+	}
+	spin_unlock_irqrestore(&dev->slock, flags);
+	return IRQ_RETVAL(istatus);
+}
+
+static void load_firmware(struct uharddoom_device *dev)
+{
+	unsigned i;
+	uharddoom_iow(dev, UHARDDOOM_FE_CODE_ADDR, 0);
+	for (i = 0; i < ARRAY_SIZE(udoomfw); ++i)
+		uharddoom_iow(dev, UHARDDOOM_FE_CODE_WINDOW, udoomfw[i]);
+}
+
+static void turn_on_device(struct uharddoom_device *dev)
+{
+	uharddoom_iow(dev, UHARDDOOM_RESET, UHARDDOOM_RESET_ALL);
+	// TODO initialize batch block
+	uharddoom_iow(dev, UHARDDOOM_INTR, UHARDDOOM_INTR_MASK);  // TODO do in resume
+	uharddoom_iow(dev, UHARDDOOM_INTR_ENABLE,
+		UHARDDOOM_INTR_MASK & (~UHARDDOOM_INTR_BATCH_WAIT)); // TODO disable one of job exceptions
+	uharddoom_iow(dev, UHARDDOOM_ENABLE,
+		UHARDDOOM_ENABLE_ALL & (~UHARDDOOM_ENABLE_BATCH)); // TODO disable one of job blocks
+}
+
+static void turn_off_device(struct uharddoom_device *dev)
+{
+	uharddoom_iow(dev, UHARDDOOM_ENABLE, 0);
+	uharddoom_iow(dev, UHARDDOOM_INTR_ENABLE, 0);
+	uharddoom_ior(dev, UHARDDOOM_INTR_ENABLE);  // Just a trigger.
+	uharddoom_iow(dev, UHARDDOOM_RESET, UHARDDOOM_RESET_ALL);  // TODO can we do it at the end
+}
 
 static int uharddoom_probe(struct pci_dev *pdev,
 	const struct pci_device_id *pci_id)
@@ -119,11 +131,13 @@ static int uharddoom_probe(struct pci_dev *pdev,
 	}
 
 	/* Connect the IRQ line.  */
-// 	if ((err = request_irq(pdev->irq, adlerdev_isr, IRQF_SHARED, "adlerdev", dev)))
-// 		goto out_irq;
+	if ((err = request_irq(
+		pdev->irq, uharddoom_isr, IRQF_SHARED, "uharddoom", dev
+	)))
+		goto out_irq;
 
-// 	adlerdev_iow(dev, ADLERDEV_INTR, 1);
-// 	adlerdev_iow(dev, ADLERDEV_INTR_ENABLE, 1);
+	load_firmware(dev);
+	turn_on_device(dev);
 
 	/* We're live.  Let's export the cdev.  */
 	cdev_init(&dev->cdev, &udoomdev_file_ops);
@@ -143,8 +157,8 @@ static int uharddoom_probe(struct pci_dev *pdev,
 	return 0;
 
 out_cdev:
-// 	adlerdev_iow(dev, ADLERDEV_INTR_ENABLE, 0);
-// 	free_irq(pdev->irq, dev);
+	uharddoom_iow(dev, UHARDDOOM_INTR_ENABLE, 0);
+	free_irq(pdev->irq, dev);
 out_irq:
 	pci_iounmap(pdev, dev->bar);
 out_bar:
@@ -169,35 +183,43 @@ static void uharddoom_remove(struct pci_dev *pdev)
 		device_destroy(&uharddoom_class, uharddoom_devno + dev->idx);
 	}
 	cdev_del(&dev->cdev);
-	// adlerdev_iow(dev, ADLERDEV_INTR_ENABLE, 0);
-	// free_irq(pdev->irq, dev);
+
+	turn_off_device(dev);
+	free_irq(pdev->irq, dev);
+
 	pci_iounmap(pdev, dev->bar);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
+
 	mutex_lock(&uharddoom_devices_lock);
 	uharddoom_devices[dev->idx] = 0;
 	mutex_unlock(&uharddoom_devices_lock);
+
 	kfree(dev);
 	printk(KERN_ALERT "uharddoom remove\n");
 }
 
 static int uharddoom_suspend(struct pci_dev *pdev, pm_message_t state)
 {
+	// TODO should we block new tasks?
 	unsigned long flags;
 	struct uharddoom_device *dev = pci_get_drvdata(pdev);
+
 	spin_lock_irqsave(&dev->slock, flags);
 	// TODO flush jobs
 	spin_unlock_irqrestore(&dev->slock, flags);
-// 	adlerdev_iow(dev, ADLERDEV_INTR_ENABLE, 0);
+
+	turn_off_device(dev);
 	printk(KERN_ALERT "uharddoom suspend\n");
 	return 0;
 }
 
 static int uharddoom_resume(struct pci_dev *pdev)
 {
+	// TODO - check if need to load firmware
 	struct uharddoom_device *dev = pci_get_drvdata(pdev);
-// 	adlerdev_iow(dev, ADLERDEV_INTR, 1);
-// 	adlerdev_iow(dev, ADLERDEV_INTR_ENABLE, 1);
+
+	turn_on_device(dev);
 	printk(KERN_ALERT "uharddoom resume\n");
 	return 0;
 }
