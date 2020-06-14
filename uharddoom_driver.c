@@ -32,24 +32,171 @@ struct pci_driver uharddoom_pci_driver = {
 static struct uharddoom_device *uharddoom_devices[UHARDDOOM_MAX_DEVICES];
 static DEFINE_MUTEX(uharddoom_devices_lock);
 
-/* IRQ handler.  */
+static void cancel_ctx_tasks(struct uharddoom_context *ctx)
+{
+	unsigned i;
+	struct list_head *pos;
+	struct list_head *n;
+	struct uharddoom_waitlist_entry *entry;
+	struct uharddoom_context *entry_ctx;
 
+	struct uharddoom_device *dev = ctx->dev;
+	unsigned *buffer_p = dev->kernel_pagedir.page_cpu;
+
+	list_for_each_safe(pos, n, &dev->waitlist) {
+		entry = list_entry(pos, struct uharddoom_waitlist_entry, lh);
+		entry_ctx = dev->job_context[entry->job_idx];
+
+		if (ctx == entry_ctx)
+			wake_waiter(entry);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(dev->job_context); ++i) {
+		entry_ctx = dev->job_context[i];
+
+		if (ctx == entry_ctx)
+			buffer_p[i * 4 + 2] = 0U;
+	}
+}
+
+// TODO check indices vs ptrs
+/* IRQ handler. */
 static irqreturn_t uharddoom_isr(int irq, void *opaque)
 {
 	struct uharddoom_device *dev = opaque;
+	struct uharddoom_context *ctx;
 	unsigned long flags;
 	unsigned istatus;
+	unsigned err_status;
+
+	uharddoom_va get;
+	uharddoom_va put;
+	unsigned get_idx;
 
 	spin_lock_irqsave(&dev->slock, flags);
+
 	printk(KERN_ALERT "uharddoom INTERRUPT\n");
 	istatus = uharddoom_ior(dev, UHARDDOOM_INTR)
 		& uharddoom_ior(dev, UHARDDOOM_INTR_ENABLE);
+
 	if (istatus) {
-		uharddoom_iow(dev, UHARDDOOM_INTR, istatus);
 		printk(KERN_ALERT "uharddoom INTERRUPT: %x\n", istatus);
+
+		err_status = istatus & (~UHARDDOOM_INTR_BATCH_WAIT);
+
+		/* Pause the device. */
+		uharddoom_iow(dev, UHARDDOOM_ENABLE, 0U);
+
+		/* Get job pointers. */
+		get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
+		put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
+		get_idx = get / 16;
+
+		if (err_status) {
+			ctx = dev->job_context[get_idx];
+
+			/* Mark context corrupted. */
+			ctx->error = 1;
+
+			/* Cancel it's tasks. */
+			cancel_ctx_tasks(ctx);
+
+			/* Move ptr to the next task. */
+			get = (get + 16) % UHARDDOOM_PAGE_SIZE;
+			uharddoom_iow(dev, UHARDDOOM_BATCH_GET, get);
+
+			/* Reset the device state. */
+			uharddoom_iow(dev, UHARDDOOM_RESET,
+				UHARDDOOM_RESET_ALL);
+		}
+
+		uharddoom_iow(dev, UHARDDOOM_INTR, UHARDDOOM_INTR_MASK);
+
+		/* Wake up processes with reached jobs. */
+		wake_waiters(dev, get, put);
+
+		/* Move BATCH_WAIT. */
+		set_next_waitpoint(dev);
+
+		/* Resume the device. */
+		uharddoom_iow(dev, UHARDDOOM_ENABLE, UHARDDOOM_ENABLE_ALL);
 	}
 	spin_unlock_irqrestore(&dev->slock, flags);
 	return IRQ_RETVAL(istatus);
+}
+
+static int init_batch_buffer(struct uharddoom_device *dev)
+{
+	int ret = -ENOMEM;
+	struct uharddoom_compact_pagedir *pagedir = &dev->kernel_pagedir;
+	unsigned *pagedir_entry_p;
+	unsigned *pagetable_entry_p;
+
+	pagedir->data_cpu = dma_alloc_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		&pagedir->data_dma, GFP_KERNEL | __GFP_ZERO
+	);
+	if (!pagedir->data_cpu)
+		goto out;
+
+	pagedir->pagetable_cpu = dma_alloc_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		&pagedir->pagetable_dma, GFP_KERNEL | __GFP_ZERO
+	);
+	if (!pagedir->pagetable_cpu)
+		goto out_free_pagedir;
+
+	pagedir->page_cpu = dma_alloc_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		&pagedir->page_dma, GFP_KERNEL | __GFP_ZERO
+	);
+	if (!pagedir->page_cpu)
+		goto out_free_pagetable;
+
+	pagedir_entry_p = pagedir->data_cpu;
+	pagetable_entry_p = pagedir->pagetable_cpu;
+
+	*pagedir_entry_p =
+		(pagedir->pagetable_dma >> UHARDDOOM_PDE_PA_SHIFT)
+		| UHARDDOOM_PDE_PRESENT;
+	*pagetable_entry_p =
+		(pagedir->page_dma >> UHARDDOOM_PTE_PA_SHIFT)
+		| UHARDDOOM_PTE_PRESENT;
+
+	ret = 0;
+out:
+	return ret;
+out_free_pagetable:
+	dma_free_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		pagedir->pagetable_cpu, pagedir->pagetable_dma
+	);
+out_free_pagedir:
+	dma_free_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		pagedir->data_cpu, pagedir->data_dma
+	);
+	goto out;
+}
+
+static void delete_batch_buffer(struct uharddoom_device *dev)
+{
+	struct uharddoom_compact_pagedir *pagedir = &dev->kernel_pagedir;
+
+	dma_free_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		pagedir->page_cpu, pagedir->page_dma
+	);
+
+	dma_free_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		pagedir->pagetable_cpu, pagedir->pagetable_dma
+	);
+
+	dma_free_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		pagedir->data_cpu, pagedir->data_dma
+	);
 }
 
 static void load_firmware(struct uharddoom_device *dev)
@@ -63,12 +210,19 @@ static void load_firmware(struct uharddoom_device *dev)
 static void turn_on_device(struct uharddoom_device *dev)
 {
 	uharddoom_iow(dev, UHARDDOOM_RESET, UHARDDOOM_RESET_ALL);
-	// TODO initialize batch block
-	uharddoom_iow(dev, UHARDDOOM_INTR, UHARDDOOM_INTR_MASK);  // TODO do in resume
+
+	uharddoom_iow(dev, UHARDDOOM_BATCH_PDP,
+		dev->kernel_pagedir.data_dma >> UHARDDOOM_PDP_SHIFT);
+	uharddoom_iow(dev, UHARDDOOM_BATCH_GET, 0U);
+	uharddoom_iow(dev, UHARDDOOM_BATCH_PUT, 0U);
+	uharddoom_iow(dev, UHARDDOOM_BATCH_WRAP_TO, 0U);
+	uharddoom_iow(dev, UHARDDOOM_BATCH_WRAP_FROM, UHARDDOOM_PAGE_SIZE);
+	uharddoom_iow(dev, UHARDDOOM_BATCH_WAIT, UHARDDOOM_PAGE_SIZE);
+
+	uharddoom_iow(dev, UHARDDOOM_INTR, UHARDDOOM_INTR_MASK);
 	uharddoom_iow(dev, UHARDDOOM_INTR_ENABLE,
-		UHARDDOOM_INTR_MASK & (~UHARDDOOM_INTR_BATCH_WAIT)); // TODO disable one of job exceptions
-	uharddoom_iow(dev, UHARDDOOM_ENABLE,
-		UHARDDOOM_ENABLE_ALL & (~UHARDDOOM_ENABLE_BATCH)); // TODO disable one of job blocks
+		UHARDDOOM_INTR_MASK & (~UHARDDOOM_INTR_JOB_DONE));
+	uharddoom_iow(dev, UHARDDOOM_ENABLE, UHARDDOOM_ENABLE_ALL);
 }
 
 static void turn_off_device(struct uharddoom_device *dev)
@@ -84,7 +238,7 @@ static int uharddoom_probe(struct pci_dev *pdev,
 {
 	int err, i;
 
-	/* Allocate our structure.  */
+	/* Allocate our structure. */
 	struct uharddoom_device *dev = kzalloc(sizeof *dev, GFP_KERNEL);
 	printk(KERN_ALERT "uharddoom probe\n");
 	if (!dev) {
@@ -94,10 +248,11 @@ static int uharddoom_probe(struct pci_dev *pdev,
 	pci_set_drvdata(pdev, dev);
 	dev->pdev = pdev;
 
-	/* Locks etc.  */
+	/* Locks, lists etc. */
 	spin_lock_init(&dev->slock);
+	INIT_LIST_HEAD(&dev->waitlist);
 
-	/* Allocate a free index.  */
+	/* Allocate a free index. */
 	mutex_lock(&uharddoom_devices_lock);
 	for (i = 0; i < UHARDDOOM_MAX_DEVICES; i++)
 		if (!uharddoom_devices[i])
@@ -111,7 +266,7 @@ static int uharddoom_probe(struct pci_dev *pdev,
 	dev->idx = i;
 	mutex_unlock(&uharddoom_devices_lock);
 
-	/* Enable hardware resources.  */
+	/* Enable hardware resources. */
 	if ((err = pci_enable_device(pdev)))
 		goto out_enable;
 
@@ -124,27 +279,32 @@ static int uharddoom_probe(struct pci_dev *pdev,
 	if ((err = pci_request_regions(pdev, "uharddoom")))
 		goto out_regions;
 
-	/* Map the BAR.  */
+	/* Map the BAR. */
 	if (!(dev->bar = pci_iomap(pdev, 0, 0))) {
 		err = -ENOMEM;
 		goto out_bar;
 	}
 
-	/* Connect the IRQ line.  */
+	/* Allocate kernel batch buffer. */
+	if ((err = init_batch_buffer(dev)))
+		goto out_batch_buffer;
+
+	/* Connect the IRQ line. */
 	if ((err = request_irq(
 		pdev->irq, uharddoom_isr, IRQF_SHARED, "uharddoom", dev
 	)))
 		goto out_irq;
 
+	/* Enable the device. */
 	load_firmware(dev);
 	turn_on_device(dev);
 
-	/* We're live.  Let's export the cdev.  */
+	/* We're live.  Let's export the cdev. */
 	cdev_init(&dev->cdev, &udoomdev_file_ops);
 	if ((err = cdev_add(&dev->cdev, uharddoom_devno + dev->idx, 1)))
 		goto out_cdev;
 
-	/* And register it in sysfs.  */
+	/* And register it in sysfs. */
 	dev->dev = device_create(&uharddoom_class,
 			&dev->pdev->dev, uharddoom_devno + dev->idx, dev,
 			"udoom%d", dev->idx);
@@ -157,9 +317,11 @@ static int uharddoom_probe(struct pci_dev *pdev,
 	return 0;
 
 out_cdev:
-	uharddoom_iow(dev, UHARDDOOM_INTR_ENABLE, 0);
+	turn_off_device(dev);
 	free_irq(pdev->irq, dev);
 out_irq:
+	delete_batch_buffer(dev);
+out_batch_buffer:
 	pci_iounmap(pdev, dev->bar);
 out_bar:
 	pci_release_regions(pdev);
@@ -186,6 +348,7 @@ static void uharddoom_remove(struct pci_dev *pdev)
 
 	turn_off_device(dev);
 	free_irq(pdev->irq, dev);
+	delete_batch_buffer(dev);
 
 	pci_iounmap(pdev, dev->bar);
 	pci_release_regions(pdev);

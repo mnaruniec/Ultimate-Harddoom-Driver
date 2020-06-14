@@ -44,6 +44,15 @@ struct uharddoom_pagetable {
 	struct list_head lh;
 };
 
+struct uharddoom_compact_pagedir {
+	void *data_cpu;
+	dma_addr_t data_dma;
+	void *pagetable_cpu;
+	dma_addr_t pagetable_dma;
+	void *page_cpu;
+	dma_addr_t page_dma;
+};
+
 /* Memory mappings */
 struct uharddoom_mapping {
 	uharddoom_va start;
@@ -56,9 +65,18 @@ struct uharddoom_mapping {
 /* File descriptor context */
 struct uharddoom_context {
 	struct uharddoom_device *dev;
+	unsigned error;
 	struct mutex vm_lock;
 	struct uharddoom_pagedir user_pagedir;
 	struct list_head user_mappings;
+};
+
+/* One pending wait request. */
+struct uharddoom_waitlist_entry {
+	wait_queue_head_t wq;
+	unsigned job_idx;
+	unsigned complete;
+	struct list_head lh;
 };
 
 /* Device. */
@@ -69,6 +87,9 @@ struct uharddoom_device {
 	struct device *dev;
 	void __iomem *bar;
 	spinlock_t slock;
+	struct uharddoom_compact_pagedir kernel_pagedir;
+	struct list_head waitlist;
+	struct uharddoom_context *job_context[UHARDDOOM_PAGE_SIZE / 16];
 };
 
 static inline void uharddoom_iow(struct uharddoom_device *dev,
@@ -101,5 +122,36 @@ static inline uharddoom_va last_address(uharddoom_va start_addr,
 		start_addr + page_count * UHARDDOOM_PAGE_SIZE - 1;
 	return (uharddoom_va)last_addr;
 }
+
+static inline unsigned in_buffer(uharddoom_va job_addr, uharddoom_va get,
+	uharddoom_va put)
+{
+	if (put == get)
+		return 0;
+
+	if (put > get)
+		return job_addr >= get && job_addr < put;
+
+	return job_addr >= get || job_addr < put;
+}
+
+/* True if job in buffer or at the put position */
+static inline unsigned in_buffer_incl(uharddoom_va job_addr, uharddoom_va get,
+       uharddoom_va put)
+{
+	return job_addr == put || in_buffer(job_addr, get, put);
+}
+
+static inline void wake_waiter(struct uharddoom_waitlist_entry *entry)
+{
+	list_del(&entry->lh);
+	entry->complete = 1;
+	wake_up(&entry->wq);
+}
+
+extern void wake_waiters(struct uharddoom_device *dev, uharddoom_va get,
+	uharddoom_va put);
+
+extern void set_next_waitpoint(struct uharddoom_device *dev);
 
 #endif  // UHARDDOOM_COMMON_H

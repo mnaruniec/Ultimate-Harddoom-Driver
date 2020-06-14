@@ -48,6 +48,7 @@ static int udoomdev_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 
 	ctx->dev = dev;
+	ctx->error = 0;
 	mutex_init(&ctx->vm_lock);
 	INIT_LIST_HEAD(&ctx->user_mappings);
 	ret = init_pagedir(dev, &ctx->user_pagedir);
@@ -511,24 +512,242 @@ static long ioctl_unmap_buffer(struct file *filp, unsigned long arg)
 	return unmap_buffer(filp, arg_struct.addr);
 }
 
+static void init_waitlist_entry(struct uharddoom_waitlist_entry *entry,
+	unsigned job_idx)
+{
+	entry->job_idx = job_idx;
+	entry->complete = 0;
+	INIT_LIST_HEAD(&entry->lh);
+	init_waitqueue_head(&entry->wq);
+}
+
+// TODO check list_iters for difference in break vs finish
+static void add_waitlist_entry(struct uharddoom_device *dev,
+	struct uharddoom_waitlist_entry *new, uharddoom_va get,
+	uharddoom_va put)
+{
+	struct list_head *pos = dev->waitlist.next;
+	struct uharddoom_waitlist_entry *entry;
+
+	unsigned new_job_addr = new->job_idx * 16;
+	unsigned get_idx = get / 16;
+
+	/* Skips unreached tasks before ours. */
+	while (pos != &dev->waitlist) {
+		entry = list_entry(pos, struct uharddoom_waitlist_entry, lh);
+		if (!in_buffer_incl(new_job_addr, get, entry->job_idx * 16))
+			break;
+
+		pos = pos->next;
+	}
+
+	list_add_tail(&new->lh, pos);
+}
+
+static int wait_for_addr(struct uharddoom_context *ctx,
+	uharddoom_va waitpoint, unsigned long *slock_flags)
+{
+	uharddoom_va get;
+	uharddoom_va put;
+	struct uharddoom_waitlist_entry entry;
+
+	struct uharddoom_device *dev = ctx->dev;
+
+	printk(KERN_ALERT "wait_for_addr - waitpoint: %x, job_idx: %u\n", waitpoint, waitpoint / 16);
+
+	/* Pause the device. */
+	uharddoom_iow(dev, UHARDDOOM_ENABLE, 0U);
+
+	/* Check if waitpoint already reached. */
+	get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
+	put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
+	if (get == waitpoint || !in_buffer_incl(waitpoint, get, put)) {
+		uharddoom_iow(dev, UHARDDOOM_ENABLE, UHARDDOOM_ENABLE_ALL);
+		return 0;
+	}
+
+	wake_waiters(dev, get, put);
+	init_waitlist_entry(&entry, waitpoint / 16);
+	add_waitlist_entry(dev, &entry, get, put);
+	set_next_waitpoint(dev);
+
+	uharddoom_iow(dev, UHARDDOOM_ENABLE, UHARDDOOM_ENABLE_ALL);
+	spin_unlock_irqrestore(&dev->slock, *slock_flags);
+
+	if (wait_event_interruptible(entry.wq, entry.complete)) {
+		spin_lock_irqsave(&dev->slock, *slock_flags);
+		/* We need to remove incomplete entry ourselves. */
+		if (!entry.complete)
+			list_del(&entry.lh);
+
+		return -ERESTARTSYS;
+	}
+
+	spin_lock_irqsave(&dev->slock, *slock_flags);
+	if (ctx->error)
+		return -EIO;
+
+	return 0;
+}
+
+static inline unsigned buffer_full(struct uharddoom_device *dev,
+	uharddoom_va get, uharddoom_va put)
+{
+	uharddoom_va after_put = (put + 16) % UHARDDOOM_PAGE_SIZE;
+	unsigned after_put_idx = after_put / 16;
+
+	/* Hardware buffer is full. */
+	if (after_put == get)
+		return 1;
+
+	/* We need to let oldest waiters wake up. */
+	return !list_empty(&dev->waitlist) && after_put_idx == list_first_entry(
+		&dev->waitlist, struct uharddoom_waitlist_entry, lh)->job_idx;
+}
+
+static int run(struct file *filp, uharddoom_va addr, unsigned size)
+{
+	return 0;
+// 	int ret = -EIO;
+//
+// 	unsigned long flags;
+// 	uharddoom_va get;
+// 	uharddoom_va put;
+// 	uharddoom_va after_put;
+//
+// 	unsigned put_word;
+// 	unsigned *task_buffer;
+//
+// 	struct uharddoom_context *ctx = filp->private_data;
+// 	struct uharddoom_device *dev = ctx->dev;
+//
+// 	printk(KERN_ALERT "run begin\n");
+//
+// 	if (addr & 3 || size & 3)
+// 		return -EINVAL;
+//
+// 	spin_lock_irqsave(&dev->slock, flags);
+//
+// 	if (ctx->error)
+// 		goto out_unlock;
+//
+// 	get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
+// 	put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
+// 	after_put = (put + 16) % UHARDDOOM_PAGE_SIZE;
+//
+// 	while (buffer_full(dev, get, put)) {
+// 		printk(KERN_ALERT "run: BUFFER FULL, waiting\n");
+//
+// 		ret = wait_for_addr(
+// 			ctx, (after_put + 16) % UHARDDOOM_PAGE_SIZE, &flags
+// 		);
+// 		if (ret)
+// 			goto out_unlock;
+//
+// 		get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
+// 		put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
+// 		after_put = (put + 16) % UHARDDOOM_PAGE_SIZE;
+// 	}
+//
+// 	put_word = put / 4;
+//
+// 	printk(KERN_ALERT "run - old put: %u, put_word: %u\n", put, put_word);
+//
+//
+// 	task_buffer = dev->kernel_pagedir.page_cpu;
+// 	task_buffer[put_word] =
+// 		ctx->user_pagedir.data_dma >> UHARDDOOM_PDP_SHIFT;
+// 	task_buffer[put_word + 1] = addr;
+// 	task_buffer[put_word + 2] = size;
+// 	uharddoom_iow(dev, UHARDDOOM_BATCH_PUT, after_put);
+//
+// 	ret = 0;
+// out_unlock:
+// 	spin_unlock_irqrestore(&dev->slock, flags);
+// 	printk(KERN_ALERT "run end\n");
+// 	return ret;
+}
+
 static long ioctl_run(struct file *filp, unsigned long arg)
 {
+	struct udoomdev_ioctl_run arg_struct;
+	if (copy_from_user(&arg_struct, (void __user *)arg, sizeof(arg_struct)))
+		return -EFAULT;
 	printk(KERN_ALERT "uharddoom ioctl run\n");
-	// TODO
-	return 0;
+	return run(filp, arg_struct.addr, arg_struct.size);
+}
+
+static int wait(struct file *filp, unsigned num_back)
+{
+	int ret = -EIO;
+	unsigned long flags;
+	uharddoom_va i;
+	unsigned i_idx;
+	unsigned found = 0;
+
+	uharddoom_va put;
+	uharddoom_va get;
+	uharddoom_va waitpoint;
+	struct uharddoom_context *ctx = filp->private_data;
+	struct uharddoom_device *dev = ctx->dev;
+
+	spin_lock_irqsave(&dev->slock, flags);
+
+	printk(KERN_ALERT "wait begin\n");
+
+	if (ctx->error)
+		goto out_unlock;
+
+	if (num_back >= UHARDDOOM_PAGE_SIZE / 16)
+		goto out_correct;
+
+	put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
+	get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
+
+	i = put;
+	while (i != get) {
+		i = i ? i : UHARDDOOM_PAGE_SIZE;
+		i -= 16;
+		i_idx = i / 16;
+
+		if (dev->job_context[i_idx] == ctx) {
+			if (!num_back) {
+				found = 1;
+				break;
+			}
+			num_back--;
+		}
+	}
+
+	if (!found)
+		goto out_correct;
+
+	/* We want to wait for buffer head to reach job after the found one. */
+	waitpoint = (i + 16) % UHARDDOOM_PAGE_SIZE;
+	ret = wait_for_addr(ctx, waitpoint, &flags);
+
+out_unlock:
+	spin_unlock_irqrestore(&dev->slock, flags);
+	printk(KERN_ALERT "wait end\n");
+	return ret;
+out_correct:
+	ret = 0;
+	goto out_unlock;
 }
 
 static long ioctl_wait(struct file *filp, unsigned long arg)
 {
+	struct udoomdev_ioctl_wait arg_struct;
+	if (copy_from_user(&arg_struct, (void __user *)arg, sizeof(arg_struct)))
+		return -EFAULT;
 	printk(KERN_ALERT "uharddoom ioctl wait\n");
-	// TODO
+	return wait(filp, arg_struct.num_back);
 	return 0;
 }
 
 static long udoomdev_ioctl(struct file *filp, unsigned int cmd,
 	unsigned long arg)
 {
-	printk(KERN_ALERT "uharddoom ioctl\n");
 	switch (cmd) {
 	case UDOOMDEV_IOCTL_CREATE_BUFFER:
 		return ioctl_create_buffer(filp, arg);
