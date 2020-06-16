@@ -530,7 +530,6 @@ static void add_waitlist_entry(struct uharddoom_device *dev,
 	struct uharddoom_waitlist_entry *entry;
 
 	unsigned new_job_addr = new->job_idx * 16;
-	unsigned get_idx = get / 16;
 
 	/* Skips unreached tasks before ours. */
 	while (pos != &dev->waitlist) {
@@ -607,65 +606,64 @@ static inline unsigned buffer_full(struct uharddoom_device *dev,
 
 static int run(struct file *filp, uharddoom_va addr, unsigned size)
 {
-	return 0;
-// 	int ret = -EIO;
-//
-// 	unsigned long flags;
-// 	uharddoom_va get;
-// 	uharddoom_va put;
-// 	uharddoom_va after_put;
-//
-// 	unsigned put_word;
-// 	unsigned *task_buffer;
-//
-// 	struct uharddoom_context *ctx = filp->private_data;
-// 	struct uharddoom_device *dev = ctx->dev;
-//
-// 	printk(KERN_ALERT "run begin\n");
-//
-// 	if (addr & 3 || size & 3)
-// 		return -EINVAL;
-//
-// 	spin_lock_irqsave(&dev->slock, flags);
-//
-// 	if (ctx->error)
-// 		goto out_unlock;
-//
-// 	get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
-// 	put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
-// 	after_put = (put + 16) % UHARDDOOM_PAGE_SIZE;
-//
-// 	while (buffer_full(dev, get, put)) {
-// 		printk(KERN_ALERT "run: BUFFER FULL, waiting\n");
-//
-// 		ret = wait_for_addr(
-// 			ctx, (after_put + 16) % UHARDDOOM_PAGE_SIZE, &flags
-// 		);
-// 		if (ret)
-// 			goto out_unlock;
-//
-// 		get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
-// 		put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
-// 		after_put = (put + 16) % UHARDDOOM_PAGE_SIZE;
-// 	}
-//
-// 	put_word = put / 4;
-//
-// 	printk(KERN_ALERT "run - old put: %u, put_word: %u\n", put, put_word);
-//
-//
-// 	task_buffer = dev->kernel_pagedir.page_cpu;
-// 	task_buffer[put_word] =
-// 		ctx->user_pagedir.data_dma >> UHARDDOOM_PDP_SHIFT;
-// 	task_buffer[put_word + 1] = addr;
-// 	task_buffer[put_word + 2] = size;
-// 	uharddoom_iow(dev, UHARDDOOM_BATCH_PUT, after_put);
-//
-// 	ret = 0;
-// out_unlock:
-// 	spin_unlock_irqrestore(&dev->slock, flags);
-// 	printk(KERN_ALERT "run end\n");
-// 	return ret;
+	int ret = -EIO;
+
+	unsigned long flags;
+	uharddoom_va get;
+	uharddoom_va put;
+	uharddoom_va after_put;
+
+	unsigned put_word;
+	unsigned *task_buffer;
+
+	struct uharddoom_context *ctx = filp->private_data;
+	struct uharddoom_device *dev = ctx->dev;
+
+	printk(KERN_ALERT "run begin\n");
+
+	if (addr & 3 || size & 3)
+		return -EINVAL;
+
+	spin_lock_irqsave(&dev->slock, flags);
+
+	if (ctx->error)
+		goto out_unlock;
+
+	get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
+	put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
+	after_put = (put + 16) % UHARDDOOM_PAGE_SIZE;
+
+	while (buffer_full(dev, get, put)) {
+		printk(KERN_ALERT "run: BUFFER FULL, waiting\n");
+
+		ret = wait_for_addr(
+			ctx, (after_put + 16) % UHARDDOOM_PAGE_SIZE, &flags
+		);
+		if (ret)
+			goto out_unlock;
+
+		get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
+		put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
+		after_put = (put + 16) % UHARDDOOM_PAGE_SIZE;
+	}
+
+	put_word = put / 4;
+
+	printk(KERN_ALERT "run - old put: %u, put_word: %u\n", put, put_word);
+
+
+	task_buffer = dev->kernel_pagedir.page_cpu;
+	task_buffer[put_word] =
+		ctx->user_pagedir.data_dma >> UHARDDOOM_PDP_SHIFT;
+	task_buffer[put_word + 1] = addr;
+	task_buffer[put_word + 2] = size;
+	uharddoom_iow(dev, UHARDDOOM_BATCH_PUT, after_put);
+
+	ret = 0;
+out_unlock:
+	spin_unlock_irqrestore(&dev->slock, flags);
+	printk(KERN_ALERT "run end\n");
+	return ret;
 }
 
 static long ioctl_run(struct file *filp, unsigned long arg)
