@@ -73,55 +73,75 @@ static irqreturn_t uharddoom_isr(int irq, void *opaque)
 	uharddoom_va put;
 	unsigned get_idx;
 
+	printk(KERN_ALERT "isr LOCK BEFORE ACQ\n");
 	spin_lock_irqsave(&dev->slock, flags);
+	printk(KERN_ALERT "isr LOCK AFTER ACQ\n");
 
 	printk(KERN_ALERT "uharddoom INTERRUPT\n");
 	istatus = uharddoom_ior(dev, UHARDDOOM_INTR)
 		& uharddoom_ior(dev, UHARDDOOM_INTR_ENABLE);
+	printk(KERN_ALERT "INTERRUPT step 0, istatus: %x\n", istatus);
 
 	if (istatus) {
 		printk(KERN_ALERT "uharddoom INTERRUPT: %x\n", istatus);
-
 		err_status = istatus & (~UHARDDOOM_INTR_BATCH_WAIT);
 
+		printk(KERN_ALERT "INTERRUPT step 1\n");
 		/* Pause the device. */
 		uharddoom_iow(dev, UHARDDOOM_ENABLE, 0U);
+		printk(KERN_ALERT "INTERRUPT step 2\n");
 
 		/* Get job pointers. */
 		get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
 		put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
 		get_idx = get / 16;
+		printk(KERN_ALERT "INTERRUPT step 3\n");
 
 		if (err_status) {
+			printk(KERN_ALERT "INTERRUPT step 4\n");
+
 			ctx = dev->job_context[get_idx];
+			printk(KERN_ALERT "INTERRUPT step 5\n");
 
 			/* Mark context corrupted. */
 			ctx->error = 1;
+			printk(KERN_ALERT "INTERRUPT step 6\n");
 
 			/* Cancel it's tasks. */
 			cancel_ctx_tasks(ctx);
+			printk(KERN_ALERT "INTERRUPT step 7\n");
 
 			/* Move ptr to the next task. */
 			get = (get + 16) % UHARDDOOM_PAGE_SIZE;
 			uharddoom_iow(dev, UHARDDOOM_BATCH_GET, get);
+			printk(KERN_ALERT "INTERRUPT step 8\n");
 
 			/* Reset the device state. */
 			uharddoom_iow(dev, UHARDDOOM_RESET,
 				UHARDDOOM_RESET_ALL);
+			printk(KERN_ALERT "INTERRUPT step 9\n");
+
 		}
 
 		uharddoom_iow(dev, UHARDDOOM_INTR, UHARDDOOM_INTR_MASK);
+		printk(KERN_ALERT "INTERRUPT step 10\n");
 
 		/* Wake up processes with reached jobs. */
 		wake_waiters(dev, get, put);
+		printk(KERN_ALERT "INTERRUPT step 11\n");
 
 		/* Move BATCH_WAIT. */
 		set_next_waitpoint(dev);
+		printk(KERN_ALERT "INTERRUPT step 12\n");
 
 		/* Resume the device. */
 		uharddoom_iow(dev, UHARDDOOM_ENABLE, UHARDDOOM_ENABLE_ALL);
+		printk(KERN_ALERT "INTERRUPT step 13\n");
 	}
+
+	printk(KERN_ALERT "isr LOCK BEFORE REL\n");
 	spin_unlock_irqrestore(&dev->slock, flags);
+	printk(KERN_ALERT "isr LOCK AFTER REL\n");
 	return IRQ_RETVAL(istatus);
 }
 
@@ -203,6 +223,7 @@ static void load_firmware(struct uharddoom_device *dev)
 {
 	unsigned i;
 	uharddoom_iow(dev, UHARDDOOM_FE_CODE_ADDR, 0);
+	printk(KERN_ALERT "firmware_size: %lu\n", ARRAY_SIZE(udoomfw));
 	for (i = 0; i < ARRAY_SIZE(udoomfw); ++i)
 		uharddoom_iow(dev, UHARDDOOM_FE_CODE_WINDOW, udoomfw[i]);
 }
@@ -341,6 +362,8 @@ out_alloc:
 static void uharddoom_remove(struct pci_dev *pdev)
 {
 	struct uharddoom_device *dev = pci_get_drvdata(pdev);
+	printk(KERN_ALERT "uharddoom remove begin\n");
+
 	if (dev->dev) {
 		device_destroy(&uharddoom_class, uharddoom_devno + dev->idx);
 	}
@@ -359,7 +382,7 @@ static void uharddoom_remove(struct pci_dev *pdev)
 	mutex_unlock(&uharddoom_devices_lock);
 
 	kfree(dev);
-	printk(KERN_ALERT "uharddoom remove\n");
+	printk(KERN_ALERT "uharddoom remove end\n");
 }
 
 static int uharddoom_suspend(struct pci_dev *pdev, pm_message_t state)

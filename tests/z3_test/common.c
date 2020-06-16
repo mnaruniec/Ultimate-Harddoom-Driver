@@ -47,7 +47,9 @@ void do_wait_for_err(int fd, uint32_t cnt) {
 
 void do_run_and_wait_with_err(int fd, uint32_t addr, uint32_t size) {
 	struct udoomdev_ioctl_run run = {addr, size};
+	printf("doing run\n");
 	ioctl(fd, UDOOMDEV_IOCTL_RUN, &run); // ignore
+	printf("doing wait\n");
 	do_wait_for_err(fd, 0);
 }
 
