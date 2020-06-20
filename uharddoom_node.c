@@ -28,7 +28,7 @@ static int init_pagedir(struct uharddoom_device *dev,
 	INIT_LIST_HEAD(&pagedir->pagetables);
 	pagedir->data_cpu = dma_alloc_coherent(
 		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
-		&pagedir->data_dma, GFP_KERNEL
+		&pagedir->data_dma, GFP_KERNEL | __GFP_ZERO
 	);
 	if (!pagedir->data_cpu)
 		return -ENOMEM;
