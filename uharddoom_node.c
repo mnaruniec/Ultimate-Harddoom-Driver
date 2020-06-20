@@ -32,8 +32,6 @@ static int init_pagedir(struct uharddoom_device *dev,
 	);
 	if (!pagedir->data_cpu)
 		return -ENOMEM;
-
-	// printk(KERN_ALERT "init_pagedir - data_cpu %lx\n", (unsigned long)pagedir->data_cpu);
 	return 0;
 }
 
@@ -43,7 +41,6 @@ static int udoomdev_open(struct inode *inode, struct file *file)
 	struct uharddoom_device *dev = container_of(
 		inode->i_cdev, struct uharddoom_device, cdev);
 	struct uharddoom_context *ctx = kzalloc(sizeof *ctx, GFP_KERNEL);
-	// printk(KERN_ALERT "uharddoom open\n");
 	if (!ctx)
 		return -ENOMEM;
 
@@ -67,7 +64,6 @@ static long ioctl_create_buffer(struct file *filp, unsigned long arg)
 	struct udoomdev_ioctl_create_buffer arg_struct;
 	if (copy_from_user(&arg_struct, (void __user *)arg, sizeof(arg_struct)))
 		return -EFAULT;
-	// printk(KERN_ALERT "uharddoom ioctl create buffer: %u\n", arg_struct.size);
 	return create_buffer_fd(filp, arg_struct.size);
 }
 
@@ -109,8 +105,6 @@ static int allocate_pde_range(struct uharddoom_context *ctx, unsigned start,
 
 	INIT_LIST_HEAD(&new_list);
 
-	// printk(KERN_ALERT "allocate_pde_range - start: %x, last: %x\n", start, last);
-
 	list_for_each(pos, &ctx->user_pagedir.pagetables) {
 		entry = list_entry(pos, struct uharddoom_pagetable, lh);
 		curr = entry->idx;
@@ -123,8 +117,6 @@ static int allocate_pde_range(struct uharddoom_context *ctx, unsigned start,
 
 	if (last != 0 && curr == last)
 		skip_last = 1;
-
-	// printk(KERN_ALERT "allocate_pde_range - skip_start: %u, skip_last: %u\n", skip_start, skip_last);
 
 	before = pos;
 
@@ -145,8 +137,6 @@ static int allocate_pde_range(struct uharddoom_context *ctx, unsigned start,
 		INIT_LIST_HEAD(&new->lh);
 
 		list_add_tail(&new->lh, &new_list);
-
-		// printk(KERN_ALERT "allocate_pde_range - allocated pagetable %u\n", i);
 	}
 
 	pagedir_entry_p = ctx->user_pagedir.data_cpu;
@@ -165,10 +155,8 @@ static int allocate_pde_range(struct uharddoom_context *ctx, unsigned start,
 		*pagedir_entry_p = (entry->data_dma >> UHARDDOOM_PDE_PA_SHIFT)
 			| UHARDDOOM_PDE_PRESENT;
 
-		// printk(KERN_ALERT "allocate_pde_range - linked pagetable %u, entry_addr: %lx\n", i, pagedir_entry_p);
 		pagedir_entry_p++;
 	}
-	// printk(KERN_ALERT "allocate_pde_range - success\n");
 
 	return 0;
 out_free_new:
@@ -199,10 +187,7 @@ static void buffer_fill_pagetables(struct uharddoom_pagedir *pagedir,
 	unsigned readonly)
 {
 	unsigned i;
-
 	unsigned page_count = num_pages(buffer->size);
-
-	uharddoom_va last_addr = last_address(start_addr, page_count);
 	unsigned start_pdi = UHARDDOOM_VA_PDI(start_addr);
 	unsigned start_pti = UHARDDOOM_VA_PTI(start_addr);
 
@@ -216,29 +201,15 @@ static void buffer_fill_pagetables(struct uharddoom_pagedir *pagedir,
 
 	unsigned writable = readonly ? 0 : UHARDDOOM_PTE_WRITABLE;
 
-	// printk(KERN_ALERT "buffer_fill_pagetables - start_addr: %lx, last_addr: %lx\n",
-		// (unsigned long)start_addr, (unsigned long)last_addr);
-
-	// printk(KERN_ALERT "buffer_fill_pagetables - start_pdi: %x, start_pti: %x\n",
-		// start_pdi, start_pti);
-
 	entry = get_pagetable(pagedir, start_pdi);
 	pos = &entry->lh;
 
 	pagetable_entry_p = entry->data_cpu;
 	pagetable_entry_p += start_pti;
 
-	// printk(KERN_ALERT "buffer_fill_pagetables - initial pagetable entry_addr: %lx\n",
-		// (unsigned long)pagetable_entry_p);
-
 	buffer_pos = &buffer->page_list;
 
 	for (i = 0; i < page_count; ++i) {
-		// printk(KERN_ALERT "buffer_fill_pagetables - page %u\n",
-			// i);
-		// printk(KERN_ALERT "buffer_fill_pagetables - start_pdi: %x, start_pti: %x, entry_addr: %lx\n",
-			// start_pdi, start_pti, pagetable_entry_p);
-
 		buffer_pos = buffer_pos->next;
 		buffer_entry =
 			list_entry(buffer_pos, struct uharddoom_page_node, lh);
@@ -250,7 +221,6 @@ static void buffer_fill_pagetables(struct uharddoom_pagedir *pagedir,
 
 		start_pti++;
 		if (start_pti >= 1024) {
-			// printk(KERN_ALERT "buffer_fill_pagetables - change pdi\n");
 			start_pti = 0;
 			start_pdi++;
 			pos = pos->next;
@@ -260,7 +230,6 @@ static void buffer_fill_pagetables(struct uharddoom_pagedir *pagedir,
 			pagetable_entry_p++;
 		}
 	}
-	// printk(KERN_ALERT "buffer_fill_pagetables - exit\n");
 }
 
 static int add_mapping(struct uharddoom_context *ctx, struct file *filp,
@@ -277,11 +246,6 @@ static int add_mapping(struct uharddoom_context *ctx, struct file *filp,
 	struct uharddoom_mapping *new = kmalloc(sizeof(*new), GFP_KERNEL);
 	if (!new)
 		return -ENOMEM;
-
-	// printk(KERN_ALERT "add_mapping - start_addr: %lx, last_addr: %lx, page_count: %u\n",
-		// (unsigned long)start_addr, (unsigned long)last_addr, page_count);
-	// printk(KERN_ALERT "add_mapping - start_pdi: %x, last_pdi: %x\n",
-		// start_pdi, last_pdi);
 
 	INIT_LIST_HEAD(&new->lh);
 	new->file = filp;
@@ -333,8 +297,6 @@ static long map_buffer(struct file *filp, unsigned buf_fd, unsigned readonly)
 		fput(b_filp);
 		return -EPERM;
 	}
-	// printk(KERN_ALERT "map_buffer - F_COUNT: %ld\n", atomic_long_read(&b_filp->f_count));
-
 
 	buffer = b_filp->private_data;
 	if (buffer->dev != ctx->dev) {
@@ -343,7 +305,6 @@ static long map_buffer(struct file *filp, unsigned buf_fd, unsigned readonly)
 	}
 
 	page_count = num_pages(buffer->size);
-	// printk(KERN_ALERT "map_buffer - page_count: %u\n", page_count);
 
 	if (mutex_lock_interruptible(&ctx->vm_lock)) {
 		fput(b_filp);
@@ -392,8 +353,6 @@ static long ioctl_map_buffer(struct file *filp, unsigned long arg)
 	struct udoomdev_ioctl_map_buffer arg_struct;
 	if (copy_from_user(&arg_struct, (void __user *)arg, sizeof(arg_struct)))
 		return -EFAULT;
-	// printk(KERN_ALERT "uharddoom ioctl map buffer fd: %u, readonly %u\n",
-		// arg_struct.buf_fd, arg_struct.map_rdonly);
 	return map_buffer(filp, arg_struct.buf_fd, arg_struct.map_rdonly);
 }
 
@@ -424,14 +383,13 @@ static void clean_page_tables(struct uharddoom_context *ctx, uharddoom_va addr,
 		start_pti++;
 
 		if (!entry->used) {
+			// TODO ??? free ???
 			// printk(KERN_ALERT "clean_page_tables - remove pagetable %u\n",
 				// entry->idx);
 			list_del(pos);
 		}
 
 		if (start_pti >= 1024) {
-			// printk(KERN_ALERT "clean_page_tables - change pdi\n");
-
 			start_pti = 0;
 			start_pdi++;
 			pos = n;
@@ -444,13 +402,9 @@ static void clean_page_tables(struct uharddoom_context *ctx, uharddoom_va addr,
 	}
 
 	/* Flush device TLB. */
-	printk(KERN_ALERT "clean_page_tables LOCK BEFORE ACQ\n");
 	spin_lock_irqsave(&ctx->dev->slock, flags);
-	printk(KERN_ALERT "clean_page_tables LOCK AFTER ACQ\n");
 	uharddoom_iow(ctx->dev, UHARDDOOM_RESET, UHARDDOOM_RESET_TLB_USER);
-	printk(KERN_ALERT "clean_page_tables LOCK BEFORE REL\n");
 	spin_unlock_irqrestore(&ctx->dev->slock, flags);
-	printk(KERN_ALERT "clean_page_tables LOCK AFTER REL\n");
 }
 
 static void remove_mapping(struct uharddoom_context *ctx,
@@ -461,7 +415,6 @@ static void remove_mapping(struct uharddoom_context *ctx,
 	unsigned page_count = mapping->page_count;
 	struct file *file = mapping->file;
 
-	// printk(KERN_ALERT "removing mapping starting at %x\n", mapping->start);
 	list_del(pos);
 	kfree(mapping);
 	clean_page_tables(ctx, addr, page_count);
@@ -501,7 +454,6 @@ static long ioctl_unmap_buffer(struct file *filp, unsigned long arg)
 	struct udoomdev_ioctl_unmap_buffer arg_struct;
 	if (copy_from_user(&arg_struct, (void __user *)arg, sizeof(arg_struct)))
 		return -EFAULT;
-	// printk(KERN_ALERT "uharddoom ioctl unmap buffer\n");
 	return unmap_buffer(filp, arg_struct.addr);
 }
 
@@ -536,14 +488,10 @@ static int run(struct file *filp, uharddoom_va addr, unsigned size)
 	struct uharddoom_context *ctx = filp->private_data;
 	struct uharddoom_device *dev = ctx->dev;
 
-	// printk(KERN_ALERT "run begin\n");
-
 	if (addr & 3 || size & 3)
 		return -EINVAL;
 
-	printk(KERN_ALERT "run LOCK BEFORE ACQ\n");
 	spin_lock_irqsave(&dev->slock, flags);
-	printk(KERN_ALERT "run LOCK AFTER ACQ\n");
 
 	if (ctx->error)
 		goto out_unlock;
@@ -553,8 +501,6 @@ static int run(struct file *filp, uharddoom_va addr, unsigned size)
 	after_put = (put + 16) % UHARDDOOM_PAGE_SIZE;
 
 	while (buffer_full(dev, get, put)) {
-		// printk(KERN_ALERT "run: BUFFER FULL, waiting\n");
-
 		ret = wait_for_addr(
 			ctx, (after_put + 16) % UHARDDOOM_PAGE_SIZE, &flags, 1
 		);
@@ -569,9 +515,6 @@ static int run(struct file *filp, uharddoom_va addr, unsigned size)
 	put_word = put / 4;
 	put_idx = put / 16;
 
-	printk(KERN_ALERT "run - old put: %u, put_word: %u\n", put, put_word);
-
-
 	task_buffer = dev->kernel_pagedir.page_cpu;
 	task_buffer[put_word] =
 		ctx->user_pagedir.data_dma >> UHARDDOOM_PDP_SHIFT;
@@ -582,10 +525,7 @@ static int run(struct file *filp, uharddoom_va addr, unsigned size)
 
 	ret = 0;
 out_unlock:
-	printk(KERN_ALERT "run LOCK BEFORE REL\n");
 	spin_unlock_irqrestore(&dev->slock, flags);
-	printk(KERN_ALERT "run AFTER REL\n");
-	printk(KERN_ALERT "run end\n");
 	return ret;
 }
 
@@ -594,7 +534,6 @@ static long ioctl_run(struct file *filp, unsigned long arg)
 	struct udoomdev_ioctl_run arg_struct;
 	if (copy_from_user(&arg_struct, (void __user *)arg, sizeof(arg_struct)))
 		return -EFAULT;
-	// printk(KERN_ALERT "uharddoom ioctl run\n");
 	return run(filp, arg_struct.addr, arg_struct.size);
 }
 
@@ -612,9 +551,7 @@ static int wait(struct file *filp, unsigned num_back, unsigned interruptible)
 	struct uharddoom_context *ctx = filp->private_data;
 	struct uharddoom_device *dev = ctx->dev;
 
-	printk(KERN_ALERT "wait LOCK BEFORE ACQ\n");
 	spin_lock_irqsave(&dev->slock, flags);
-	printk(KERN_ALERT "wait LOCK AFTER ACQ\n");
 
 	if (ctx->error)
 		goto out_unlock;
@@ -648,10 +585,7 @@ static int wait(struct file *filp, unsigned num_back, unsigned interruptible)
 	ret = wait_for_addr(ctx, waitpoint, &flags, interruptible);
 
 out_unlock:
-	printk(KERN_ALERT "wait LOCK BEFORE REL\n");
 	spin_unlock_irqrestore(&dev->slock, flags);
-	printk(KERN_ALERT "wait LOCK AFTER REL\n");
-	printk(KERN_ALERT "wait end\n");
 	return ret;
 out_correct:
 	ret = 0;
@@ -663,7 +597,6 @@ static long ioctl_wait(struct file *filp, unsigned long arg)
 	struct udoomdev_ioctl_wait arg_struct;
 	if (copy_from_user(&arg_struct, (void __user *)arg, sizeof(arg_struct)))
 		return -EFAULT;
-	// printk(KERN_ALERT "uharddoom ioctl wait\n");
 	return wait(filp, arg_struct.num_back, 1);
 }
 
@@ -693,8 +626,6 @@ static int udoomdev_release(struct inode *inode, struct file *file)
 	struct list_head *n;
 	struct uharddoom_mapping *mapping;
 
-	// printk(KERN_ALERT "uharddoom release begin\n");
-
 	/* Wait uninterruptively for context's last task to finish. */
 	wait(file, 0, 0);
 
@@ -711,6 +642,5 @@ static int udoomdev_release(struct inode *inode, struct file *file)
 	mutex_unlock(&ctx->vm_lock);
 
 	kfree(ctx);
-	// printk(KERN_ALERT "uharddoom release end\n");
 	return 0;
 }

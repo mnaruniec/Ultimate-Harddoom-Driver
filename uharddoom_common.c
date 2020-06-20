@@ -77,10 +77,7 @@ int wait_for_addr(struct uharddoom_context *ctx, uharddoom_va waitpoint,
 	uharddoom_va get;
 	uharddoom_va put;
 	struct uharddoom_waitlist_entry entry;
-
 	struct uharddoom_device *dev = ctx->dev;
-
-	printk(KERN_ALERT "wait_for_addr - waitpoint: %x, job_idx: %u\n", waitpoint, waitpoint / 16);
 
 	/* Pause the device. */
 	uharddoom_iow(dev, UHARDDOOM_ENABLE, 0U);
@@ -99,17 +96,12 @@ int wait_for_addr(struct uharddoom_context *ctx, uharddoom_va waitpoint,
 	set_next_waitpoint(dev);
 
 	uharddoom_iow(dev, UHARDDOOM_ENABLE, UHARDDOOM_ENABLE_ALL);
-	printk(KERN_ALERT "wait_for_addr LOCK BEFORE REL\n");
 	spin_unlock_irqrestore(&dev->slock, *slock_flags);
-	printk(KERN_ALERT "wait_for_addr LOCK AFTER REL\n");
 
 	if (interruptible) {
 		if (wait_event_interruptible(entry.wq, entry.complete)) {
-			printk(KERN_ALERT "wait interrupted");
-			printk(KERN_ALERT "wait_for_addr LOCK BEFORE ACQ\n");
 			spin_lock_irqsave(&dev->slock, *slock_flags);
-			printk(KERN_ALERT "wait_for_addr LOCK AFTER ACQ\n");
-			/* We need to remove incomplete entry ourselves. */
+			/* We need to remove the incomplete entry ourselves. */
 			if (!entry.complete)
 				list_del(&entry.lh);
 
@@ -119,9 +111,7 @@ int wait_for_addr(struct uharddoom_context *ctx, uharddoom_va waitpoint,
 		wait_event(entry.wq, entry.complete);
 	}
 
-	printk(KERN_ALERT "wait_for_addr LOCK BEFORE ACQ\n");
 	spin_lock_irqsave(&dev->slock, *slock_flags);
-	printk(KERN_ALERT "wait_for_addr LOCK AFTER ACQ\n");
 	if (ctx->error)
 		return -EIO;
 

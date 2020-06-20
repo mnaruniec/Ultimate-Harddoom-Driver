@@ -58,8 +58,6 @@ long create_buffer_fd(struct file *filp, unsigned int size)
 	struct uharddoom_context *ctx = filp->private_data;
 	struct uharddoom_device *dev = ctx->dev;
 
-	printk(KERN_ALERT "create buffer\n");
-
 	page_count = num_pages(size);
 	if (!page_count)
 		return -EINVAL;
@@ -118,7 +116,6 @@ static vm_fault_t buffer_fault(struct vm_fault *vmf)
 	struct list_head *pos = &buffer->page_list;
 	struct uharddoom_page_node *node;
 	struct page *page;
-	printk(KERN_ALERT "buffer fault, pgoff = %lu\n", vmf->pgoff);
 
 	if (!filp) {
 		BUG();
@@ -143,6 +140,5 @@ static int buffer_release(struct inode *inode, struct file *filp)
 	struct uharddoom_buffer *buffer = filp->private_data;
 	struct uharddoom_device *dev = buffer->dev;
 	delete_buffer(dev, filp->private_data);
-	printk(KERN_ALERT "release buffer\n");
 	return 0;
 }
