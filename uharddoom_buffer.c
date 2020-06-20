@@ -140,7 +140,6 @@ static vm_fault_t buffer_fault(struct vm_fault *vmf)
 
 static int buffer_release(struct inode *inode, struct file *filp)
 {
-	// TODO make device unremovable until buffers exist
 	struct uharddoom_buffer *buffer = filp->private_data;
 	struct uharddoom_device *dev = buffer->dev;
 	delete_buffer(dev, filp->private_data);

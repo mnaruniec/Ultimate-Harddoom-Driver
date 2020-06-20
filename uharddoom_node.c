@@ -308,7 +308,6 @@ out_free_mapping:
 	return ret;
 }
 
-// TODO check address limit to signed int
 static long map_buffer(struct file *filp, unsigned buf_fd, unsigned readonly)
 {
 	long ret = 0;
@@ -332,7 +331,7 @@ static long map_buffer(struct file *filp, unsigned buf_fd, unsigned readonly)
 		return -EBADF;
 	if (!is_buffer(b_filp)) {
 		fput(b_filp);
-		return -EACCES;  // Analogous to mmap's EACCES.
+		return -EPERM;
 	}
 	// printk(KERN_ALERT "map_buffer - F_COUNT: %ld\n", atomic_long_read(&b_filp->f_count));
 
@@ -340,7 +339,7 @@ static long map_buffer(struct file *filp, unsigned buf_fd, unsigned readonly)
 	buffer = b_filp->private_data;
 	if (buffer->dev != ctx->dev) {
 		fput(b_filp);
-		return -EACCES;  // TODO right?
+		return -EPERM;
 	}
 
 	page_count = num_pages(buffer->size);
@@ -362,21 +361,15 @@ static long map_buffer(struct file *filp, unsigned buf_fd, unsigned readonly)
 		prev_end = start + entry->page_count;
 	}
 
+	ret = -ENOMEM;
 	if (!found) {
-		if (prev_end << UHARDDOOM_PAGE_SHIFT > INT_MAX) {
+		if (prev_end << UHARDDOOM_PAGE_SHIFT > INT_MAX)
 			/* We can't fit starting address in signed int. */
-			// printk(KERN_ALERT "map_buffer - uint32_t overflow\n");
-			ret = -ENOMEM;
 			goto out_fput;
-		}
 		space = global_end - prev_end;
-		if (space < page_count) {
+		if (space < page_count)
 			/* We don't have enough space even at the end. */
-			// printk(KERN_ALERT "map_buffer - too little end space\n");
-			ret = -ENOMEM;
 			goto out_fput;
-		}
-		// printk(KERN_ALERT "map_buffer - mapping at the end\n");
 	}
 
 	ret = add_mapping(
@@ -693,7 +686,6 @@ static long udoomdev_ioctl(struct file *filp, unsigned int cmd,
 	}
 }
 
-// TODO think about removing the wait marker after error
 static int udoomdev_release(struct inode *inode, struct file *file)
 {
 	struct uharddoom_context *ctx = file->private_data;

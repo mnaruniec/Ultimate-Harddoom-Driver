@@ -59,7 +59,6 @@ static void cancel_ctx_tasks(struct uharddoom_context *ctx)
 	}
 }
 
-// TODO check indices vs ptrs
 /* IRQ handler. */
 static irqreturn_t uharddoom_isr(int irq, void *opaque)
 {
@@ -279,7 +278,7 @@ static int uharddoom_probe(struct pci_dev *pdev,
 		if (!uharddoom_devices[i])
 			break;
 	if (i == UHARDDOOM_MAX_DEVICES) {
-		err = -ENOSPC; // TODO right?
+		err = -ENOSPC;
 		mutex_unlock(&uharddoom_devices_lock);
 		goto out_slot;
 	}

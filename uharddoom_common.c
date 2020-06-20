@@ -50,7 +50,6 @@ static void init_waitlist_entry(struct uharddoom_waitlist_entry *entry,
 	init_waitqueue_head(&entry->wq);
 }
 
-// TODO check list_iters for difference in break vs finish
 static void add_waitlist_entry(struct uharddoom_device *dev,
 	struct uharddoom_waitlist_entry *new, uharddoom_va get,
 	uharddoom_va put)

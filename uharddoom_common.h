@@ -35,7 +35,6 @@ struct uharddoom_pagedir {
 	struct list_head pagetables;
 };
 
-// TODO unify int types (uint32_t etc.)
 struct uharddoom_pagetable {
 	unsigned int idx;
 	unsigned int used;
@@ -93,21 +92,21 @@ struct uharddoom_device {
 };
 
 static inline void uharddoom_iow(struct uharddoom_device *dev,
-				uint32_t reg, uint32_t val)
+				unsigned reg, unsigned val)
 {
 	iowrite32(val, dev->bar + reg);
 }
 
-static inline uint32_t uharddoom_ior(struct uharddoom_device *dev, uint32_t reg)
+static inline unsigned uharddoom_ior(struct uharddoom_device *dev, unsigned reg)
 {
-	uint32_t res = ioread32(dev->bar + reg);
+	unsigned res = ioread32(dev->bar + reg);
 	return res;
 }
 
-static inline uint32_t num_pages(uint32_t size)
+static inline unsigned num_pages(unsigned size)
 {
-	uint32_t over = 0;
-	uint32_t last_page = round_down(UINT_MAX, PAGE_SIZE);
+	unsigned over = 0;
+	unsigned last_page = round_down(UINT_MAX, PAGE_SIZE);
 	if (size > last_page) {
 		size = last_page;
 		over = 1;

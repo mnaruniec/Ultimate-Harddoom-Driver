@@ -1,5 +1,4 @@
-# TODO change to /lib/modules/`uname -r`/build
-KDIR ?= ./linux-5.5.5
+KDIR ?= /lib/modules/`uname -r`/build
 
 default:
 	$(MAKE) -C $(KDIR) M=$$PWD
