@@ -512,98 +512,6 @@ static long ioctl_unmap_buffer(struct file *filp, unsigned long arg)
 	return unmap_buffer(filp, arg_struct.addr);
 }
 
-static void init_waitlist_entry(struct uharddoom_waitlist_entry *entry,
-	unsigned job_idx)
-{
-	entry->job_idx = job_idx;
-	entry->complete = 0;
-	INIT_LIST_HEAD(&entry->lh);
-	init_waitqueue_head(&entry->wq);
-}
-
-// TODO check list_iters for difference in break vs finish
-static void add_waitlist_entry(struct uharddoom_device *dev,
-	struct uharddoom_waitlist_entry *new, uharddoom_va get,
-	uharddoom_va put)
-{
-	struct list_head *pos = dev->waitlist.next;
-	struct uharddoom_waitlist_entry *entry;
-
-	unsigned new_job_addr = new->job_idx * 16;
-
-	/* Skips unreached tasks before ours. */
-	while (pos != &dev->waitlist) {
-		entry = list_entry(pos, struct uharddoom_waitlist_entry, lh);
-		if (!in_buffer_incl(new_job_addr, get, entry->job_idx * 16))
-			break;
-
-		pos = pos->next;
-	}
-
-	list_add_tail(&new->lh, pos);
-}
-
-static int wait_for_addr(struct uharddoom_context *ctx, uharddoom_va waitpoint,
-	unsigned long *slock_flags, unsigned interruptible)
-{
-	unsigned long flags = *slock_flags;
-
-	uharddoom_va get;
-	uharddoom_va put;
-	struct uharddoom_waitlist_entry entry;
-
-	struct uharddoom_device *dev = ctx->dev;
-
-	printk(KERN_ALERT "wait_for_addr - waitpoint: %x, job_idx: %u\n", waitpoint, waitpoint / 16);
-
-	/* Pause the device. */
-	uharddoom_iow(dev, UHARDDOOM_ENABLE, 0U);
-
-	/* Check if waitpoint already reached. */
-	get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
-	put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
-	if (get == waitpoint || !in_buffer_incl(waitpoint, get, put)) {
-		uharddoom_iow(dev, UHARDDOOM_ENABLE, UHARDDOOM_ENABLE_ALL);
-		return 0;
-	}
-
-	wake_waiters(dev, get, put);
-	init_waitlist_entry(&entry, waitpoint / 16);
-	add_waitlist_entry(dev, &entry, get, put);
-	set_next_waitpoint(dev);
-
-	uharddoom_iow(dev, UHARDDOOM_ENABLE, UHARDDOOM_ENABLE_ALL);
-	printk(KERN_ALERT "wait_for_addr LOCK BEFORE REL\n");
-	spin_unlock_irqrestore(&dev->slock, flags);
-	printk(KERN_ALERT "wait_for_addr LOCK AFTER REL\n");
-
-	if (interruptible) {
-		if (wait_event_interruptible(entry.wq, entry.complete)) {
-			printk(KERN_ALERT "wait interrupted");
-			printk(KERN_ALERT "wait_for_addr LOCK BEFORE ACQ\n");
-			spin_lock_irqsave(&dev->slock, flags);
-			*slock_flags = flags;
-			printk(KERN_ALERT "wait_for_addr LOCK AFTER ACQ\n");
-			/* We need to remove incomplete entry ourselves. */
-			if (!entry.complete)
-				list_del(&entry.lh);
-
-			return -ERESTARTSYS;
-		}
-	} else {
-		wait_event(entry.wq, entry.complete);
-	}
-
-	printk(KERN_ALERT "wait_for_addr LOCK BEFORE ACQ\n");
-	spin_lock_irqsave(&dev->slock, flags);
-	*slock_flags = flags;
-	printk(KERN_ALERT "wait_for_addr LOCK AFTER ACQ\n");
-	if (ctx->error)
-		return -EIO;
-
-	return 0;
-}
-
 static inline unsigned buffer_full(struct uharddoom_device *dev,
 	uharddoom_va get, uharddoom_va put)
 {
@@ -795,7 +703,7 @@ static int udoomdev_release(struct inode *inode, struct file *file)
 
 	// printk(KERN_ALERT "uharddoom release begin\n");
 
-	/* Wait ininterruptively for context's last task to finish. */
+	/* Wait uninterruptively for context's last task to finish. */
 	wait(file, 0, 0);
 
 	mutex_lock(&ctx->vm_lock);

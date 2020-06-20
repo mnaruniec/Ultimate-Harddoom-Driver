@@ -249,9 +249,9 @@ static void turn_on_device(struct uharddoom_device *dev)
 static void turn_off_device(struct uharddoom_device *dev)
 {
 	uharddoom_iow(dev, UHARDDOOM_ENABLE, 0);
+	uharddoom_iow(dev, UHARDDOOM_RESET, UHARDDOOM_RESET_ALL);
 	uharddoom_iow(dev, UHARDDOOM_INTR_ENABLE, 0);
 	uharddoom_ior(dev, UHARDDOOM_INTR_ENABLE);  // Just a trigger.
-	uharddoom_iow(dev, UHARDDOOM_RESET, UHARDDOOM_RESET_ALL);  // TODO can we do it at the end
 }
 
 static int uharddoom_probe(struct pci_dev *pdev,
@@ -387,12 +387,24 @@ static void uharddoom_remove(struct pci_dev *pdev)
 
 static int uharddoom_suspend(struct pci_dev *pdev, pm_message_t state)
 {
-	// TODO should we block new tasks?
 	unsigned long flags;
+	uharddoom_va get;
+	uharddoom_va put;
+	unsigned ctx_idx;
 	struct uharddoom_device *dev = pci_get_drvdata(pdev);
+	struct uharddoom_context *ctx;
 
 	spin_lock_irqsave(&dev->slock, flags);
-	// TODO flush jobs
+
+	put = uharddoom_ior(dev, UHARDDOOM_BATCH_PUT);
+	get = uharddoom_ior(dev, UHARDDOOM_BATCH_GET);
+
+	if (put != get) {
+		ctx_idx = (put ? put - 16 : UHARDDOOM_PAGE_SIZE - 16) / 16;
+		ctx = dev->job_context[ctx_idx];
+		wait_for_addr(ctx, put, &flags, 0);
+	}
+
 	spin_unlock_irqrestore(&dev->slock, flags);
 
 	turn_off_device(dev);
@@ -402,9 +414,8 @@ static int uharddoom_suspend(struct pci_dev *pdev, pm_message_t state)
 
 static int uharddoom_resume(struct pci_dev *pdev)
 {
-	// TODO - check if need to load firmware
 	struct uharddoom_device *dev = pci_get_drvdata(pdev);
-
+	load_firmware(dev);
 	turn_on_device(dev);
 	printk(KERN_ALERT "uharddoom resume\n");
 	return 0;

@@ -154,4 +154,7 @@ extern void wake_waiters(struct uharddoom_device *dev, uharddoom_va get,
 
 extern void set_next_waitpoint(struct uharddoom_device *dev);
 
+extern int wait_for_addr(struct uharddoom_context *ctx, uharddoom_va waitpoint,
+	unsigned long *slock_flags, unsigned interruptible);
+
 #endif  // UHARDDOOM_COMMON_H
