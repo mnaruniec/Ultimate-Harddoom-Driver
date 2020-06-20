@@ -67,6 +67,19 @@ static long ioctl_create_buffer(struct file *filp, unsigned long arg)
 	return create_buffer_fd(filp, arg_struct.size);
 }
 
+static void delete_pagetable(struct uharddoom_device *dev,
+	struct uharddoom_pagetable *entry)
+{
+	struct list_head *pos = &entry->lh;
+
+	list_del(pos);
+	dma_free_coherent(
+		&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
+		entry->data_cpu, entry->data_dma
+	);
+	kfree(entry);
+}
+
 static void delete_pagetables(struct uharddoom_device *dev,
 	struct list_head *list)
 {
@@ -76,13 +89,7 @@ static void delete_pagetables(struct uharddoom_device *dev,
 
 	list_for_each_safe(pos, n, list) {
 		entry = list_entry(pos, struct uharddoom_pagetable, lh);
-
-		list_del(pos);
-		dma_free_coherent(
-			&dev->pdev->dev, UHARDDOOM_PAGE_SIZE,
-			entry->data_cpu, entry->data_dma
-		);
-		kfree(entry);
+		delete_pagetable(dev, entry);
 	}
 }
 
@@ -363,11 +370,17 @@ static void clean_page_tables(struct uharddoom_context *ctx, uharddoom_va addr,
 	struct list_head *n;
 	struct uharddoom_pagetable *entry;
 	unsigned *pagetable_entry_p;
+	unsigned *pagedir_p;
 
 	unsigned i;
 	unsigned long flags;
 	unsigned start_pdi = UHARDDOOM_VA_PDI(addr);
 	unsigned start_pti = UHARDDOOM_VA_PTI(addr);
+	struct list_head deleted;
+
+	INIT_LIST_HEAD(&deleted);
+
+	pagedir_p = ctx->user_pagedir.data_cpu;
 
 	entry = get_pagetable(&ctx->user_pagedir, start_pdi);
 	pos = &entry->lh;
@@ -383,10 +396,9 @@ static void clean_page_tables(struct uharddoom_context *ctx, uharddoom_va addr,
 		start_pti++;
 
 		if (!entry->used) {
-			// TODO ??? free ???
-			// printk(KERN_ALERT "clean_page_tables - remove pagetable %u\n",
-				// entry->idx);
 			list_del(pos);
+			list_add_tail(pos, &deleted);
+			pagedir_p[entry->idx] = 0U;
 		}
 
 		if (start_pti >= 1024) {
@@ -405,6 +417,9 @@ static void clean_page_tables(struct uharddoom_context *ctx, uharddoom_va addr,
 	spin_lock_irqsave(&ctx->dev->slock, flags);
 	uharddoom_iow(ctx->dev, UHARDDOOM_RESET, UHARDDOOM_RESET_TLB_USER);
 	spin_unlock_irqrestore(&ctx->dev->slock, flags);
+
+	/* Free deleted pagetables. */
+	delete_pagetables(ctx->dev, &deleted);
 }
 
 static void remove_mapping(struct uharddoom_context *ctx,
